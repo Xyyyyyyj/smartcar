@@ -1,5 +1,4 @@
 #include "line_tracking.hpp"
-#include "motor_control.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -18,6 +17,13 @@ static constexpr int32 CORNER_JUMP_THRESH = 6;
 static constexpr int32 MIDLINE_CROSS_CONSEC_ROWS = 3;
 
 namespace {
+
+static inline int32 clamp_int32(int32 x, int32 lo, int32 hi)
+{
+    if(x < lo) return lo;
+    if(x > hi) return hi;
+    return x;
+}
 
 static void swap_lane_left_right(LaneResult &res)
 {
@@ -69,41 +75,6 @@ struct line_track_features
     int16 right_corner_x = 0;
     int16 right_corner_y = 0;
 };
-
-static void draw_circle_outline(zf_device_ips200 &lcd, int cx, int cy, int r, uint16 color)
-{
-    if(r <= 0) return;
-    int x = 0;
-    int y = r;
-    int d = 3 - (r << 1);
-    auto plot8 = [&](int px, int py)
-    {
-        const int xs[8] = {cx + px, cx - px, cx + px, cx - px, cx + py, cx - py, cx + py, cx - py};
-        const int ys[8] = {cy + py, cy + py, cy - py, cy - py, cy + px, cy + px, cy - px, cy - px};
-        for(int i = 0; i < 8; ++i)
-        {
-            if(xs[i] >= 0 && xs[i] < (int)LCD_W && ys[i] >= 0 && ys[i] < (int)LCD_H)
-            {
-                lcd.draw_point((uint16)xs[i], (uint16)ys[i], color);
-            }
-        }
-    };
-
-    while(y >= x)
-    {
-        plot8(x, y);
-        if(d < 0)
-        {
-            d += (x << 2) + 6;
-        }
-        else
-        {
-            d += ((x - y) << 2) + 10;
-            --y;
-        }
-        ++x;
-    }
-}
 
 static void draw_circle_filled(zf_device_ips200 &lcd, int cx, int cy, int r, uint16 color)
 {
@@ -310,6 +281,35 @@ struct LeftRoundaboutSM
         int first_p1_hit_d_width = 0;
         int first_p1_hit_abs_d_right = 0;
 
+        // 先做“区间级”右边界稳定性判定：
+        // 只有整个扫描区间内相邻行右边界都不过阈值，才允许进入 1/2/3 点识别。
+        bool right_border_stable_window = true;
+        for(int row = row_hi - 1; row >= row_lo; --row)
+        {
+            const int prev_row_below = row + 1;
+            const int r_prev = (int)res.right_border[prev_row_below];
+            const int r_cur = (int)res.right_border[row];
+            const int abs_d_right = abs_i(r_prev - r_cur);
+            if(abs_d_right > max_abs_d_right) max_abs_d_right = abs_d_right;
+            if(abs_d_right > LEFT_RB_STABLE_THR)
+            {
+                right_border_stable_window = false;
+                break;
+            }
+        }
+
+        const bool right_border_overall_stable = right_border_stable_window;
+        if(!right_border_overall_stable)
+        {
+            left_rb_printf("[LEFT_RB][P1_SCAN] row=[%d..%d] right_straight=%d window_stable=%d all_points=%d max(l_prev-l_cur)=%d max(w_cur-w_prev)=%d max(|r_prev-r_cur|)=%d stable_thr=%d\r\n",
+                           row_lo, row_hi, right_border_is_straight ? 1 : 0, right_border_stable_window ? 1 : 0,
+                           all_points_found ? 1 : 0, max_d_left, max_d_width, max_abs_d_right, LEFT_RB_STABLE_THR);
+            left_rb_printf("[LEFT_RB][P1_SCAN] p1_found=%d p1=(x=%d,y=%d) first_hit_row=%d dL=%d dW=%d dR=%d\r\n",
+                           p1_found ? 1 : 0, p1_x, p1_y,
+                           first_p1_hit_row, first_p1_hit_d_left, first_p1_hit_d_width, first_p1_hit_abs_d_right);
+            return;
+        }
+
         // 从下往上扫描（row 越大越靠近车体）。
         // 这里明确约定：“上一行”在当前行下方，即 prev_row_below = row + 1。
         // 为保证“当前行/上一行”都在判断区间内，row 从 row_hi-1 开始。
@@ -331,9 +331,7 @@ struct LeftRoundaboutSM
             if(d_width > max_d_width) max_d_width = d_width;
             if(abs_d_right > max_abs_d_right) max_abs_d_right = abs_d_right;
 
-            // 右边界判定：不要求“直线”，只要相邻行不突变即可
-            const bool right_border_stable = (abs_d_right <= LEFT_RB_STABLE_THR);
-            if(!right_border_stable || all_points_found) continue;
+            if(all_points_found) continue;
 
             // 1点：右边界不突变，上一次(上一行)左边界 - 这次(该行)左边界 > 10
             // 且该行赛道宽度 - 上一行赛道宽度 > 10
@@ -375,8 +373,8 @@ struct LeftRoundaboutSM
             }
         }
 
-        left_rb_printf("[LEFT_RB][P1_SCAN] row=[%d..%d] right_straight=%d all_points=%d max(l_prev-l_cur)=%d max(w_cur-w_prev)=%d max(|r_prev-r_cur|)=%d stable_thr=%d\r\n",
-                       row_lo, row_hi, right_border_is_straight ? 1 : 0, all_points_found ? 1 : 0,
+        left_rb_printf("[LEFT_RB][P1_SCAN] row=[%d..%d] right_straight=%d window_stable=%d all_points=%d max(l_prev-l_cur)=%d max(w_cur-w_prev)=%d max(|r_prev-r_cur|)=%d stable_thr=%d\r\n",
+                       row_lo, row_hi, right_border_is_straight ? 1 : 0, right_border_stable_window ? 1 : 0, all_points_found ? 1 : 0,
                        max_d_left, max_d_width, max_abs_d_right, LEFT_RB_STABLE_THR);
         left_rb_printf("[LEFT_RB][P1_SCAN] p1_found=%d p1=(x=%d,y=%d) first_hit_row=%d dL=%d dW=%d dR=%d\r\n",
                        p1_found ? 1 : 0, p1_x, p1_y,
@@ -1207,9 +1205,9 @@ void line_tracking_process_frame(zf_device_ips200 &lcd,
     // ============== 在屏幕上叠加：赛道边界 + 中心拟合线 ==============
     // 算法坐标：120x160（宽x高）；屏幕显示的是旋转180°后的 160x120 图像。
     // 映射关系（算法点 -> 原图点）：(x_alg, y_alg) -> (x_src = y_alg, y_src = x_alg)
-    // err_x 统计窗口固定为 110±3 行
-    const int row_begin = (int)clamp_int32(110 - 3, 0, IMAGE_HEIGHT - 1);
-    const int row_end = (int)clamp_int32(110 + 3, row_begin, IMAGE_HEIGHT - 1);
+    // err_x 统计窗口固定为 100±3 行
+    const int row_begin = (int)clamp_int32(100 - 3, 0, IMAGE_HEIGHT - 1);
+    const int row_end = (int)clamp_int32(100 + 3, row_begin, IMAGE_HEIGHT - 1);
     // 左环岛判定窗口边界（从下往上第5~100行）：在屏幕上标蓝线，便于调试
     const int win_row_hi = (int)clamp_int32((IMAGE_HEIGHT - 1) - 5, 0, IMAGE_HEIGHT - 1);
     const int win_row_lo = (int)clamp_int32((IMAGE_HEIGHT - 1) - 100, 0, win_row_hi);

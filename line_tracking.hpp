@@ -12,9 +12,7 @@ static constexpr uint16 LCD_H = 320;
 
 // 说明：当前工程的巡线算法直接使用旋转 180° 后的灰度图作为输入（显示与算法一致）。
 
-// 视觉线程输出底部中心线误差，控制线程据此生成左右轮目标转速
-// 图像在 line_tracking.cpp 中已旋转 180°；近端车道若移到画面上方，可把本值改小（例如 0～40）
-static constexpr int32 LINE_FOLLOW_ROW_BEGIN = IMAGE_HEIGHT - 55;      // 参与底部平均的起始行（取底部60行）
+// 视觉线程输出中心线误差，控制线程据此生成左右轮目标转速
 static constexpr int32 LCD_LINE_WIDTH_SCALE = 5;                        // 显示宽度相对当前实现放大倍数
 static constexpr int32 LCD_BASE_LINE_WIDTH = 2;                         // 当前实现为2像素（原点+右侧1点）
 static constexpr int32 LCD_DRAW_LINE_WIDTH = LCD_BASE_LINE_WIDTH * LCD_LINE_WIDTH_SCALE;
