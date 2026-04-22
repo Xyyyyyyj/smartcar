@@ -474,22 +474,22 @@ int main(int, char**)
         {
             log_next = timespec_add_ms(log_next, LOG_PERIOD_MS);
             // 暂时注释掉其他周期日志，避免淹没环岛调试输出
-            printf("frm:%lu base:%ld mode:%s imu:%d lc_x:%ld dlc:%ld gz:%d steer:%ld | tgtL:%ld tgtR:%ld | dt:%luus | RPM L:%ld R:%ld | duty L:%d R:%d\r\n",
-                   (unsigned long)frame_seq,
-                   (long)base_rpm,
-                   (mode == road_mode::STRAIGHT) ? "S" : "C",
-                   (int)imu_ok,
-                   (long)err_x,
-                   (long)d_err_x,
-                   (int)gyro_z,
-                   (long)steer_rpm_imu,
-                   (long)target_rpm_left,
-                   (long)target_rpm_right,
-                   (unsigned long)dt_us,
-                   (long)rpm_left,
-                   (long)rpm_right,
-                   (int)duty_cmd_left,
-                   (int)duty_cmd_right);
+        //     printf("frm:%lu base:%ld mode:%s imu:%d lc_x:%ld dlc:%ld gz:%d steer:%ld | tgtL:%ld tgtR:%ld | dt:%luus | RPM L:%ld R:%ld | duty L:%d R:%d\r\n",
+        //            (unsigned long)frame_seq,
+        //            (long)base_rpm,
+        //            (mode == road_mode::STRAIGHT) ? "S" : "C",
+        //            (int)imu_ok,
+        //            (long)err_x,
+        //            (long)d_err_x,
+        //            (int)gyro_z,
+        //            (long)steer_rpm_imu,
+        //            (long)target_rpm_left,
+        //            (long)target_rpm_right,
+        //            (unsigned long)dt_us,
+        //            (long)rpm_left,
+        //            (long)rpm_right,
+        //            (int)duty_cmd_left,
+        //            (int)duty_cmd_right);
         }
 
         wait_control_period(control_next);
