@@ -124,8 +124,8 @@ static constexpr int LEFT_RB_LOST_DEBOUNCE_FRAMES = 3;
 static constexpr int LEFT_RB_PRINT_EVERY_N_FRAMES_IN_MODE = 10;
 static constexpr int LEFT_RB_LOOKAHEAD_ROWS = 80; // 形态检测前瞻窗口
 // ===== 形态检测阈值（stage2/stage3 在这里调）=====
-static constexpr int LEFT_RB_MIN_DOWN_RUN = 2;    // 连续“变窄”最短长度
-static constexpr int LEFT_RB_MIN_UP_RUN = 2;      // 连续“变宽”最短长度
+static constexpr int LEFT_RB_MIN_DOWN_RUN = 5;    // 连续“变窄”最短长度
+static constexpr int LEFT_RB_MIN_UP_RUN = 5;      // 连续“变宽”最短长度
 static constexpr int LEFT_RB_MIN_TOTAL_SWING = 5;// 宽度总摆幅阈值
 static constexpr int LEFT_RB_N2W_MIN_DOWN_RUN = 4;   // stage3 窄->宽：连续“变窄”最短长度
 static constexpr int LEFT_RB_N2W_MIN_UP_RUN = 4;     // stage3 窄->宽：连续“变宽”最短长度
@@ -179,7 +179,6 @@ struct LeftRoundaboutSM
         Stage3_NarrowThenWiden = 4, // 新增：先窄后宽
         Stage4_LoseLeftAgain = 5,   // 原 stage3
         Entered = 6,
-        Exiting = 7,                // 出环岛阶段
     };
 
     bool f1_widen_left = false;
@@ -223,13 +222,6 @@ struct LeftRoundaboutSM
     bool p3_found = false;
     int p3_x = -1; // 3点：2点行的左边界
     int p3_y = -1;
-    bool p4_found = false;
-    int p4_x = -1;
-    int p4_y = -1;
-    bool p5_found = false;
-    int p5_y = -1;
-    bool enter_started = false;    // 已触发“开始进入左环岛”
-    bool enter_confirmed = false;  // 冻结帧结束后确认“已进入左环岛”
 
     static int abs_i(int v) { return v < 0 ? -v : v; }
 
@@ -273,13 +265,6 @@ struct LeftRoundaboutSM
         p3_found = false;
         p3_x = -1;
         p3_y = -1;
-        p4_found = false;
-        p4_x = -1;
-        p4_y = -1;
-        p5_found = false;
-        p5_y = -1;
-        enter_started = false;
-        enter_confirmed = false;
     }
 
     void detect_points_after_entered(const LaneResult &res, const bool right_border_is_straight)
@@ -335,9 +320,7 @@ struct LeftRoundaboutSM
         const bool right_border_overall_stable = right_border_stable_window;
         if(!right_border_overall_stable)
         {
-            // 本帧扫描条件不稳定时，若上一帧已有 p1，则沿用上一帧点位
-            // 直到扫描到新的 p1 为止。
-            if(prev_p1_found)
+            if(keep_p1_after_fit && prev_p1_found)
             {
                 p1_found = true;
                 p1_x = prev_p1_x;
@@ -378,7 +361,7 @@ struct LeftRoundaboutSM
             // 1点：右边界不突变，且上一行左边界-该行左边界 > 7，且该行宽度-上一行宽度 > 7
             if(!p1_found)
             {
-                if(d_left > 10 && d_width > 10)
+                if(d_left > 5 && d_width > 10)
                 {
                     if(first_p1_hit_row < 0)
                     {
@@ -431,8 +414,7 @@ struct LeftRoundaboutSM
         left_rb_printf("[LEFT_RB][P1_SCAN] p1_found=%d p1=(x=%d,y=%d) first_hit_row=%d dL=%d dW=%d dR=%d\r\n",
                        p1_found ? 1 : 0, p1_x, p1_y,
                        first_p1_hit_row, first_p1_hit_d_left, first_p1_hit_d_width, first_p1_hit_abs_d_right);
-        // 本帧未识别到 p1 时，保留上一帧 p1，直到扫描到新 p1。
-        if(!p1_found && prev_p1_found)
+        if(!p1_found && keep_p1_after_fit && prev_p1_found)
         {
             p1_found = true;
             p1_x = prev_p1_x;
@@ -560,16 +542,6 @@ struct LeftRoundaboutSM
             state = State::Entered;
             in_left_roundabout_mode = true;
             --fit_freeze_frames_left;
-            if(fit_freeze_frames_left == 0 && enter_started && !enter_confirmed)
-            {
-                enter_confirmed = true;
-                left_rb_printf("[LEFT_RB] ENTER_LEFT_ROUNDABOUT_CONFIRMED(after_freeze) f1=%d f2=%d f3=%d f4=%d f5=%d\r\n",
-                               (int)f1_widen_left,
-                               (int)f2_left_lost,
-                               (int)f3_widen_then_narrow,
-                               (int)f4_narrow_then_widen,
-                               (int)f5_left_lost_again);
-            }
 
             have_prev = true;
             prev_left = left_now;
@@ -780,11 +752,8 @@ struct LeftRoundaboutSM
                     // 按你的要求：进入 stage3 即判定进入左环岛
                     state = State::Entered;
                     in_left_roundabout_mode = true;
-                    enter_started = true;
-                    enter_confirmed = false;
-                    fit_freeze_frames_left = LEFT_RB_FIT_FREEZE_FRAMES;
                     left_rb_printf("[LEFT_RB] stage2->stage3 widen_narrow_flag=1 turn_row=%d\r\n", turn_row);
-                    left_rb_printf("[LEFT_RB] ENTER_LEFT_ROUNDABOUT_START(by_stage3) f1=%d f2=%d f3_widen_narrow=%d\r\n",
+                    left_rb_printf("[LEFT_RB] ENTER_LEFT_ROUNDABOUT(by_stage3) f1=%d f2=%d f3_widen_narrow=%d\r\n",
                                    (int)f1_widen_left, (int)f2_left_lost, (int)f3_widen_then_narrow);
                 }
                 else
@@ -839,39 +808,14 @@ struct LeftRoundaboutSM
                 f5_width_jump_end = true;
                 state = State::Entered;
                 in_left_roundabout_mode = true;
-                enter_started = true;
-                enter_confirmed = false;
-                fit_freeze_frames_left = LEFT_RB_FIT_FREEZE_FRAMES;
                 if(left_lost_again_frames >= LEFT_RB_LOST_DEBOUNCE_FRAMES) f5_left_lost_again = true;
-                left_rb_printf("[LEFT_RB] ENTER_LEFT_ROUNDABOUT_START(by_stage4_end) f1=%d f2=%d f3_widen_narrow=%d f4_narrow_widen=%d f5_lost_again=%d f_end=%d\r\n",
+                left_rb_printf("[LEFT_RB] ENTER_LEFT_ROUNDABOUT f1=%d f2=%d f3_widen_narrow=%d f4_narrow_widen=%d f5_lost_again=%d f_end=%d\r\n",
                                (int)f1_widen_left, (int)f2_left_lost, (int)f3_widen_then_narrow,
                                (int)f4_narrow_then_widen, (int)f5_left_lost_again, (int)f5_width_jump_end);
             }
             break;
 
         case State::Entered:
-            // 只有识别到关键点位后，才允许进入出环岛状态，避免“盲切”
-            if(p1_found || p2_found || p3_found || p4_found || p5_found)
-            {
-                state = State::Exiting;
-                left_rb_printf("[LEFT_RB] entered->exiting by points p1=%d p2=%d p3=%d p4=%d p5=%d\r\n",
-                               p1_found ? 1 : 0,
-                               p2_found ? 1 : 0,
-                               p3_found ? 1 : 0,
-                               p4_found ? 1 : 0,
-                               p5_found ? 1 : 0);
-            }
-            else
-            {
-                left_rb_printf("[LEFT_RB] keep_entered waiting_points p1=%d p2=%d p3=%d p4=%d p5=%d\r\n",
-                               p1_found ? 1 : 0,
-                               p2_found ? 1 : 0,
-                               p3_found ? 1 : 0,
-                               p4_found ? 1 : 0,
-                               p5_found ? 1 : 0);
-            }
-            break;
-        case State::Exiting:
             break;
         }
 
@@ -1239,155 +1183,154 @@ void line_tracking_process_frame(zf_device_ips200 &lcd,
         g_left_rb_sm.reset();
     }
 
-    // 入环后立即停止补线，仅在“出环岛”状态按 p4/p5 判据补线
-    const bool is_exit_state = g_left_rb_sm.in_left_roundabout_mode &&
-                               (g_left_rb_sm.state == LeftRoundaboutSM::State::Exiting);
-    int p4_x = -1;
-    int p4_y = -1;
-    bool p4_found = false;
-    bool p5_found = false;
-    int p5_row = -1;
-    if(is_exit_state)
+    // 进入左环岛后：识别并标记 1/2/3 点（当前为“随图像刷新”的点）
+    g_left_rb_sm.detect_points_after_entered(g_lane_result, features.right_trueshortflag != 0);
+
+    // 补线与拟合中线（随图像刷新）：黑线为补线右边界，绿线为左边界
+
+    // 左环岛补线：
+    // - 常规：p1+p2 都存在，用两点连线补右边界
+    // - 需求变更：进入左环岛后若只识别到 p1、识别不到 p2/p3，仍按“1点补线”处理，
+    //   但补线终点改为“从 p1 往下，右边界仍有赛道的最后一行”的右边界点（其余补线/拟合逻辑不变）
+    int rb_p2_x = -1;
+    int rb_p2_y = -1;
+    bool rb_have_p2 = false;
+    if(g_left_rb_sm.in_left_roundabout_mode && g_left_rb_sm.p1_found)
     {
-        g_left_rb_sm.p4_found = false;
-        g_left_rb_sm.p4_x = -1;
-        g_left_rb_sm.p4_y = -1;
-        g_left_rb_sm.p5_found = false;
-        g_left_rb_sm.p5_y = -1;
-
-        const int row_hi = clamp_i32((IMAGE_HEIGHT - 1) - LEFT_RB_SCAN_BOTTOM_OFFSET, 1, IMAGE_HEIGHT - 1);
-        const int row_lo = clamp_i32((IMAGE_HEIGHT - 1) - LEFT_RB_SCAN_TOP_OFFSET, 0, row_hi - 1);
-        int left_lost_top_row = -1;
-        int left_lost_top_x = -1;
-
-        for(int row = row_hi - 1; row >= row_lo; --row)
+        if(g_left_rb_sm.p2_found)
         {
-            const int prev_row_below = row + 1;
-            const int l_prev = (int)g_lane_result.left_border[prev_row_below];
-            const int r_prev = (int)g_lane_result.right_border[prev_row_below];
-            const int l_cur = (int)g_lane_result.left_border[row];
-            const int r_cur = (int)g_lane_result.right_border[row];
-            const int w_prev = r_prev - l_prev;
-            const int w_cur = r_cur - l_cur;
-            const int d_right = std::abs(r_prev - r_cur);
-            const int d_width = w_cur - w_prev;
-            const int d_left = l_prev - l_cur;
-
-            if(l_cur <= LEFT_EDGE_STUCK_THR)
+            rb_p2_x = g_left_rb_sm.p2_x;
+            rb_p2_y = g_left_rb_sm.p2_y;
+            rb_have_p2 = true;
+        }
+        else
+        {
+            // 仅有 p1：找“右界有赛道的最后一行”（row 越大越靠近车体）
+            // 约束：该兜底点也必须在点位扫描窗口 [bottom-5, bottom-105] 内。
+            // 右边界无效时通常会被置为 BORDER_MAX（见 scanline），因此这里用区间判定有效性。
+            int last_row = -1;
+            const int scan_row_hi = clamp_i32((IMAGE_HEIGHT - 1) - LEFT_RB_SCAN_BOTTOM_OFFSET, 0, IMAGE_HEIGHT - 1);
+            const int scan_row_lo = clamp_i32((IMAGE_HEIGHT - 1) - LEFT_RB_SCAN_TOP_OFFSET, 0, scan_row_hi);
+            const int search_row_lo = std::max(g_left_rb_sm.p1_y, scan_row_lo);
+            for(int row = scan_row_hi; row >= search_row_lo; --row)
             {
-                if(left_lost_top_row < 0 || row < left_lost_top_row)
+                const int r = (int)g_lane_result.right_border[row];
+                if(r > BORDER_MIN && r < BORDER_MAX)
                 {
-                    left_lost_top_row = row;
-                    left_lost_top_x = l_cur;
+                    last_row = row;
+                    rb_p2_x = r;
+                    rb_p2_y = row;
+                    rb_have_p2 = true;
+                    break; // 从底部向上扫，第一次命中即为“最后一行”
                 }
             }
+            (void)last_row;
+        }
+    }
 
-            // p4：右边界突变，且宽度突变
-            if(!p4_found && d_right > 10 && d_width > 10)
-            {
-                p4_found = true;
-                p4_x = r_cur;
-                p4_y = row;
-            }
-
-            // p5：右边界不突变，且满足左边界与宽度跃迁；此时不做补线
-            if(!p5_found && d_right <= 10 && d_left > 7 && d_width > 7)
-            {
-                p5_found = true;
-                p5_row = row;
-            }
+    if(g_left_rb_sm.in_left_roundabout_mode && g_left_rb_sm.p1_found && rb_have_p2)
+    {
+        const int dy = (rb_p2_y - g_left_rb_sm.p1_y);
+        float k = 0.0f;
+        float b = 0.0f;
+        if(dy != 0)
+        {
+            k = (float)(rb_p2_x - g_left_rb_sm.p1_x) / (float)dy;
+            b = (float)g_left_rb_sm.p1_x - k * (float)g_left_rb_sm.p1_y;
+            fit_y0 = std::min(g_left_rb_sm.p1_y, rb_p2_y);
+            fit_y1 = std::max(g_left_rb_sm.p1_y, rb_p2_y);
+        }
+        else
+        {
+            // p1/p2 落在同一行时无法用两点求 x(row) 的斜率，这里用“常值右边界”兜底以便可视化补线/拟合
+            k = 0.0f;
+            b = (float)rb_p2_x;
+            fit_y0 = clamp_i32(g_left_rb_sm.p1_y, 0, IMAGE_HEIGHT - 1);
+            fit_y1 = clamp_i32(fit_y0 + 40, fit_y0, IMAGE_HEIGHT - 1);
         }
 
-        g_left_rb_sm.p4_found = p4_found;
-        g_left_rb_sm.p4_x = p4_x;
-        g_left_rb_sm.p4_y = p4_y;
-        g_left_rb_sm.p5_found = p5_found;
-        g_left_rb_sm.p5_y = p5_row;
-
-        if(!p5_found && p4_found && left_lost_top_row >= 0)
+        for(int row = fit_y0; row <= fit_y1; ++row)
         {
-            const int y0 = std::min(p4_y, left_lost_top_row);
-            const int y1 = std::max(p4_y, left_lost_top_row);
-            fit_y0 = y0;
-            fit_y1 = y1;
-
-            // 用 p4 与左侧丢线最上点构造一条直线，再用最小二乘平滑成最终补线
-            int ys_line[IMAGE_HEIGHT];
-            int xs_line[IMAGE_HEIGHT];
-            int n_line = 0;
-            const int dy = (left_lost_top_row - p4_y);
-            if(dy == 0)
-            {
-                ys_line[n_line] = p4_y;
-                xs_line[n_line] = p4_x;
-                ++n_line;
-                if(p4_y + 1 < IMAGE_HEIGHT)
-                {
-                    ys_line[n_line] = p4_y + 1;
-                    xs_line[n_line] = p4_x;
-                    ++n_line;
-                }
-            }
-            else
-            {
-                for(int row = y0; row <= y1; ++row)
-                {
-                    const float t = (float)(row - p4_y) / (float)dy;
-                    int x_interp = (int)std::lround((float)p4_x + t * (float)(left_lost_top_x - p4_x));
-                    x_interp = clamp_i32(x_interp, BORDER_MIN, BORDER_MAX);
-                    ys_line[n_line] = row;
-                    xs_line[n_line] = x_interp;
-                    ++n_line;
-                }
-            }
-
-            float k_line = 0.0f;
-            float b_line = 0.0f;
-            if(fit_line_least_squares(ys_line, xs_line, n_line, k_line, b_line))
-            {
-                for(int row = fit_y0; row <= fit_y1; ++row)
-                {
-                    int xr = (int)std::lround(k_line * (float)row + b_line);
-                    xr = clamp_i32(xr, BORDER_MIN, BORDER_MAX);
-                    supp_right[row] = xr;
-                }
-
-                int ys[IMAGE_HEIGHT];
-                int xs[IMAGE_HEIGHT];
-                int n = 0;
-                for(int row = fit_y0; row <= fit_y1; ++row)
-                {
-                    const int xl_raw = (int)g_lane_result.left_border[row];
-                    const int xr_raw = supp_right[row];
-                    if(xr_raw < 0) continue;
-                    if(xl_raw <= BORDER_MIN || xl_raw >= BORDER_MAX) continue;
-                    if(xr_raw <= BORDER_MIN || xr_raw >= BORDER_MAX) continue;
-                    const int xL = std::min(xl_raw, xr_raw);
-                    const int xR = std::max(xl_raw, xr_raw);
-                    if(xR - xL < 3) continue;
-                    ys[n] = row;
-                    xs[n] = (xL + xR) / 2;
-                    ++n;
-                }
-
-                float k_fit = 0.0f;
-                float b_fit = 0.0f;
-                if(fit_line_least_squares(ys, xs, n, k_fit, b_fit))
-                {
-                    for(int row = fit_y0; row <= fit_y1; ++row)
-                    {
-                        int xc = (int)std::lround(k_fit * (float)row + b_fit);
-                        xc = clamp_i32(xc, BORDER_MIN, BORDER_MAX);
-                        center_fit[row] = (uint8)xc;
-                    }
-                    have_supp_and_fit = true;
-                }
-            }
+            int xr = (int)std::lround(k * (float)row + b);
+            xr = clamp_i32(xr, BORDER_MIN, BORDER_MAX);
+            supp_right[row] = xr;
         }
 
-        left_rb_printf("[LEFT_RB][EXIT] p4=%d (%d,%d) p5=%d row=%d fit=%d\r\n",
-                       p4_found ? 1 : 0, p4_x, p4_y,
-                       p5_found ? 1 : 0, p5_row, have_supp_and_fit ? 1 : 0);
+        // 以“左边界(绿)”和“补线(黑)”构造中心点序列，再做最小二乘拟合
+        // 注意：补线有时会落在左边界左侧（例如点2异常/左右交换），这里用 min/max 兜底，避免 n=0
+        int ys[IMAGE_HEIGHT];
+        int xs[IMAGE_HEIGHT];
+        int n = 0;
+        for(int row = fit_y0; row <= fit_y1; ++row)
+        {
+            const int xl_raw = (int)g_lane_result.left_border[row];
+            const int xr_raw = supp_right[row];
+            if(xr_raw < 0) continue;
+            if(xl_raw <= BORDER_MIN || xl_raw >= BORDER_MAX) continue;
+            if(xr_raw <= BORDER_MIN || xr_raw >= BORDER_MAX) continue;
+
+            const int xL = std::min(xl_raw, xr_raw);
+            const int xR = std::max(xl_raw, xr_raw);
+            if(xR - xL < 3) continue;
+
+            ys[n] = row;
+            xs[n] = (xL + xR) / 2;
+            ++n;
+        }
+
+        float k_fit = 0.0f, b_fit = 0.0f;
+        if(fit_line_least_squares(ys, xs, n, k_fit, b_fit))
+        {
+            for(int row = fit_y0; row <= fit_y1; ++row)
+            {
+                int xc = (int)std::lround(k_fit * (float)row + b_fit);
+                xc = clamp_i32(xc, BORDER_MIN, BORDER_MAX);
+                center_fit[row] = (uint8)xc;
+            }
+
+            // 若拟合起点上方中线与拟合线连续偏差过大，视为上方中线丢线：
+            // 后续以“拟合中线及以下”为基准，忽略拟合中线以上原始中线。
+            int consec_gap = 0;
+            int max_consec_gap = 0;
+            const int row_scan_lo = clamp_i32(fit_y0 - LEFT_RB_CENTER_GAP_SCAN, 0, fit_y0);
+            for(int row = fit_y0 - 1; row >= row_scan_lo; --row)
+            {
+                int x_fit_up = (int)std::lround(k_fit * (float)row + b_fit);
+                x_fit_up = clamp_i32(x_fit_up, BORDER_MIN, BORDER_MAX);
+                const int x_raw = (int)g_lane_result.center_line[row];
+                if(std::abs(x_raw - x_fit_up) >= LEFT_RB_CENTER_GAP_THR)
+                {
+                    ++consec_gap;
+                    if(consec_gap > max_consec_gap) max_consec_gap = consec_gap;
+                }
+                else
+                {
+                    consec_gap = 0;
+                }
+            }
+
+            if(max_consec_gap >= LEFT_RB_CENTER_GAP_ROWS)
+            {
+                const int row_extend_lo = clamp_i32(fit_y0 - LEFT_RB_CENTER_EXTEND_UP_ROWS, 0, fit_y0);
+                for(int row = row_extend_lo; row < fit_y0; ++row)
+                {
+                    int xc = (int)std::lround(k_fit * (float)row + b_fit);
+                    xc = clamp_i32(xc, BORDER_MIN, BORDER_MAX);
+                    center_fit[row] = (uint8)xc;
+                }
+                ignore_center_above_fit = true;
+                ignore_center_above_from_row = row_extend_lo;
+            }
+            have_supp_and_fit = true;
+            g_left_rb_sm.keep_p1_after_fit = true; // FIT 成功后允许锁存 p1，直到扫描到新 p1
+            g_left_rb_sm.fit_freeze_frames_left = LEFT_RB_FIT_FREEZE_FRAMES;
+            g_left_rb_sm.state = LeftRoundaboutSM::State::Entered;
+            g_left_rb_sm.in_left_roundabout_mode = true;
+        }
+        left_rb_printf("[LEFT_RB][FIT] p1=(%d,%d) p2=(%d,%d) dy=%d win=[%d..%d] n=%d ok=%d\r\n",
+                       g_left_rb_sm.p1_x, g_left_rb_sm.p1_y,
+                       rb_p2_x, rb_p2_y,
+                       dy, fit_y0, fit_y1, n, have_supp_and_fit ? 1 : 0);
     }
 #endif
 
@@ -1495,12 +1438,6 @@ void line_tracking_process_frame(zf_device_ips200 &lcd,
         const uint16 x_lcd = (uint16)((uint32)g_left_rb_sm.p3_y * (uint32)LCD_W / (uint32)UVC_WIDTH);
         const uint16 y_lcd = (uint16)((uint32)g_left_rb_sm.p3_x * (uint32)LCD_H / (uint32)UVC_HEIGHT);
         draw_circle_filled(lcd, (int)x_lcd, (int)y_lcd, 6, RGB565_YELLOW);
-    }
-    if(g_left_rb_sm.p4_found)
-    {
-        const uint16 x_lcd = (uint16)((uint32)g_left_rb_sm.p4_y * (uint32)LCD_W / (uint32)UVC_WIDTH);
-        const uint16 y_lcd = (uint16)((uint32)g_left_rb_sm.p4_x * (uint32)LCD_H / (uint32)UVC_HEIGHT);
-        draw_circle_filled(lcd, (int)x_lcd, (int)y_lcd, 7, RGB565_MAGENTA);
     }
 #endif
 
